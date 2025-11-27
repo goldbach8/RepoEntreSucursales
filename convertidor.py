@@ -62,6 +62,7 @@ def procesar_archivo():
             'qremmdz': 'qremmdz',
             'stock mdz': 'stock_mdz',
             
+            
             'qpresslt': 'qpresslt',
             'qremslt': 'qremslt',
             'stock slt': 'stock_slt',
