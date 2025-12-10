@@ -167,25 +167,22 @@ def distribuir_stock(df):
         diff_sf_real = row['diff_sf']
         
         if diff_sf_real > 0:
-            # CAMBIO: Usamos el sobrante numérico real (entero).
-            # Si sobran 20 unidades, están disponibles 20 (no se fuerza a múltiplos de lote).
+            # Disponibilidad: Usamos el entero hacia abajo, pero permitiendo el uso de stock
             disponible_sf = math.floor(diff_sf_real)
         else:
             disponible_sf = 0
         
         # --- PROTECCIÓN DE INTEGRIDAD SF (No romper el último juego físico) ---
-        # Si SF tiene stock físico para al menos 1 caja, no lo dejamos bajar de 1 caja.
         stock_fisico_sf = row['stock_total_sf_fisico']
         
         if lote > 1 and stock_fisico_sf >= lote:
-            # Lo máximo que puede dar es (StockFisico - 1 Caja)
+            # Lo máximo que puede dar es (StockFisico - 1 Caja) para no quedarse con una caja rota inutilizable si es política
             maximo_dable_seguridad = max(0, stock_fisico_sf - lote)
             disponible_sf = min(disponible_sf, maximo_dable_seguridad)
         # -----------------------------------------------
         
         envios_deseados = {}
         total_deseado = 0
-        fam = row['familia_logica']
         
         # 2. Calcular NECESIDADES de envío (Lógica Demand)
         for suc in sucursales:
@@ -194,11 +191,9 @@ def distribuir_stock(df):
             if diferencia_real < 0:
                 falta_real = abs(diferencia_real)
                 
-                # APLICAMOS LÓGICA DE REDONDEO DE PEDIDO AQUI
-                if fam in ['DONALDSON', 'TURBO']:
-                    qty_a_pedir = ajustar_lote_simple(falta_real, lote)
-                else:
-                    qty_a_pedir = ajustar_lote_inteligente(falta_real, lote)
+                # APLICAMOS LÓGICA FLEXIBLE PARA TODOS (Sin distinción de familia)
+                # Esto soluciona el problema de que Donaldson/Turbo redondeen a 0 cuando falta casi 1 caja.
+                qty_a_pedir = calcular_qty_a_pedir(falta_real, lote)
                 
                 envios_deseados[suc] = qty_a_pedir
                 total_deseado += qty_a_pedir
@@ -212,7 +207,7 @@ def distribuir_stock(df):
             return pd.Series(envios_finales)
             
         if disponible_sf >= total_deseado:
-            # Hay suficiente para cubrir todos los deseos redondeados
+            # Hay suficiente para cubrir todos los deseos calculados
             for suc, qty in envios_deseados.items():
                 envios_finales[suc] = qty
             return pd.Series(envios_finales)
@@ -224,7 +219,7 @@ def distribuir_stock(df):
             for suc, qty_deseada in envios_deseados.items():
                 if qty_deseada > 0:
                     cantidad_proporcional = qty_deseada * ratio
-                    # Al prorratear en escasez, redondeamos al entero inferior (floor)
+                    # Al prorratear en escasez, priorizamos enviar unidades enteras
                     cantidad_reale = math.floor(cantidad_proporcional)
                     
                     if (acumulado + cantidad_reale) <= disponible_sf:
@@ -244,34 +239,36 @@ def distribuir_stock(df):
 
     return df
 
-def ajustar_lote_simple(cantidad, lote):
-    """ Redondeo hacia abajo (Floor) - Usado para Donaldson/Turbo """
-    if pd.isna(lote) or lote <= 0: lote = 1
-    return math.floor(cantidad / lote) * lote
-
-def ajustar_lote_inteligente(necesidad, lote):
+def calcular_qty_a_pedir(necesidad, lote):
     """
-    Lógica de redondeo flexible (Smart Box).
-    Se usa para definir CUÁNTO SE QUIERE ENVIAR dado una necesidad real.
+    Lógica de redondeo flexible unificada.
+    Objetivo: Acercarse a cajas cerradas si es posible, pero permitir romper caja
+    si la necesidad es muy específica o si el redondeo perjudica el abastecimiento.
     """
     if pd.isna(lote) or lote <= 1: return necesidad
     
+    # 1. Calcular cajas teóricas (Redondeo matemático estándar: 1.6 -> 2, 1.4 -> 1)
     cajas_teoricas = necesidad / lote
     cajas_redondeadas = round(cajas_teoricas)
     qty_redondeada = cajas_redondeadas * lote
     
+    # 2. Verificar cuánto nos desviamos de la necesidad real
     diferencia = abs(necesidad - qty_redondeada)
     
     # Umbral de tolerancia: 30% del tamaño de la caja
+    # Si la diferencia es menor al 30%, aceptamos la caja cerrada.
     umbral = lote * 0.30
     
     if diferencia <= umbral:
-        # Si el redondeo da 0 pero hay necesidad significativa (>50% de la caja), pedimos 1 caja.
-        if qty_redondeada == 0 and necesidad > (lote * 0.5):
-            return lote
-        return qty_redondeada
+        # Caso especial: El redondeo da 0 (ej: necesidad 4, lote 12 -> round(0.33)=0)
+        # Si la necesidad es "relevante" (> 25% de la caja), NO mandamos 0, mandamos exacto.
+        if qty_redondeada == 0 and necesidad >= (lote * 0.25):
+            return necesidad # Rompemos caja y mandamos 4 unidades
+        
+        return qty_redondeada # Mandamos cajas cerradas (ej: need 11, lote 12 -> 12)
     else:
-        # Si no cae cerca del redondeo, pedimos la cantidad exacta necesaria (rompiendo caja)
+        # Si la diferencia es muy grande (ej: need 18, lote 12 -> round=24, diff=6, umbral=3.6)
+        # Significa que estamos "en el medio". Mandamos la cantidad exacta.
         return necesidad
 
 def calcular_excedentes_sucursales(df, umbral_meses_exceso=0.5):
