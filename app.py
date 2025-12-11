@@ -267,16 +267,23 @@ else:
                                     # Evitar division por cero (demanda 0 -> inf)
                                     df_final[f'cobertura_fin_{suc}'] = stock_final / df_final[col_demanda].replace(0, 0.0001)
 
-                                # --- LIMPIEZA DE DECIMALES (ENTEROS) ---
-                                # Convertimos a int columnas que deban ser enteras para evitar .0
+                                # --- LIMPIEZA DE DECIMALES ---
+                                # Ajuste solicitado: NO convertir 'diff' a int, sino redondear a 2 decimales.
                                 for col in df_final.columns:
-                                    # Criterio: Si contiene estos textos y es numerico
-                                    condicion_nombre = any(x in col for x in ['qty', 'qpres', 'qrem', 'stock', 'diff', 'final_enviar', 'transito'])
+                                    # Criterio: Numerico y nombre específico. QUITO 'diff' de la lista de enteros.
+                                    condicion_enteros = any(x in col for x in ['qty', 'qpres', 'qrem', 'stock', 'final_enviar', 'transito'])
+                                    
                                     # Excepciones
                                     no_es_peso_vol = 'peso' not in col and 'volumen' not in col and 'cobertura' not in col
                                     
-                                    if condicion_nombre and no_es_peso_vol and pd.api.types.is_numeric_dtype(df_final[col]):
-                                        df_final[col] = df_final[col].fillna(0).round(0).astype(int)
+                                    if pd.api.types.is_numeric_dtype(df_final[col]):
+                                        # Si es de tipo entero (qty, stock, etc) -> Int
+                                        if condicion_enteros and no_es_peso_vol:
+                                            df_final[col] = df_final[col].fillna(0).round(0).astype(int)
+                                        
+                                        # Si es Sobra/Falta (diff) -> Float con 2 decimales
+                                        elif 'diff' in col:
+                                            df_final[col] = df_final[col].fillna(0).round(2)
 
                                 # GUARDAR EN SESSION STATE
                                 st.session_state.data_calculada = df_final
@@ -445,8 +452,8 @@ else:
                     df_resumen = pd.DataFrame()
                     for col_orig, col_dest in cols_resumen_map.items():
                         if col_orig in df_final.columns:
-                            # Si es cobertura, redondeamos a 2 decimales para que se vea bien
-                            if 'cobertura' in col_orig:
+                            # Si es cobertura o diferencia, redondeamos a 2 decimales para que se vea bien
+                            if 'cobertura' in col_orig or 'diff' in col_orig:
                                 df_resumen[col_dest] = df_final[col_orig].fillna(0).round(2)
                             else:
                                 df_resumen[col_dest] = df_final[col_orig]

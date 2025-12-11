@@ -45,7 +45,6 @@ def calcular_parametros_w(df):
 def estimar_demanda(df, metodo):
     """
     Estima demanda para cada SUCURSAL individualmente y luego SUMA para el TOTAL.
-    Esto asegura coherencia "física".
     """
     sucursales = {
         'sf': ('qremsf', 'qpressf'),
@@ -92,7 +91,7 @@ def estimar_demanda(df, metodo):
         
         df[col_name] = df.apply(lambda x: calcular_demanda_fila(x, c_rem, c_pres), axis=1)
 
-    # 2. Calcular la Demanda Total como la suma de las demandas de sucursales
+    # 2. Calcular la Demanda Total
     df['demanda_estimada_total'] = df[cols_demanda_suc].sum(axis=1)
 
     return df
@@ -100,7 +99,6 @@ def estimar_demanda(df, metodo):
 def calcular_coberturas(df, cob_sf, cob_ba, cob_mdz, cob_slt):
     """
     Calcula coberturas y diferencias (Sobra/Falta).
-    Las columnas 'diff_{suc}' y 'diff_sf' contienen la diferencia EXACTA (real).
     """
     # 1. Cobertura TOTAL (GLOBAL)
     if 'stock_total' not in df.columns: df['stock_total'] = 0
@@ -116,20 +114,15 @@ def calcular_coberturas(df, cob_sf, cob_ba, cob_mdz, cob_slt):
     
     df['cobertura_ini_sf'] = stock_sf_calculo / df['demanda_estimada_sf'].replace(0, 0.00001)
     
-    # --- LOGICA DE BALANCEO SF ---
-    # Objetivo real = MIN(Objetivo Usuario, Cobertura Global)
+    # Objetivo real
     df['target_sf_eff'] = np.minimum(cob_sf, df['cobertura_ini_total'])
     stock_obj_sf = df['demanda_estimada_sf'] * df['target_sf_eff']
     
-    # Diferencia Real SF (Sin redondear)
+    # Diferencia Real SF (Float)
     df['diff_sf'] = stock_sf_calculo - stock_obj_sf
 
     # 3. Sucursales (Individuales)
-    config_sucursales = {
-        'ba': cob_ba,
-        'mdz': cob_mdz,
-        'slt': cob_slt
-    }
+    config_sucursales = {'ba': cob_ba, 'mdz': cob_mdz, 'slt': cob_slt}
     
     for suc, cob_target_usuario in config_sucursales.items():
         col_stock = f'stock_{suc}'
@@ -144,142 +137,187 @@ def calcular_coberturas(df, cob_sf, cob_ba, cob_mdz, cob_slt):
         
         df[f'cobertura_ini_{suc}'] = stock_suc_total / df[col_demanda_local].replace(0, 0.00001)
         
-        # Balanceo por Escasez
         target_suc_eff = np.minimum(cob_target_usuario, df['cobertura_ini_total'])
         stock_obj_ideal = df[col_demanda_local] * target_suc_eff
         
-        # Diferencia Real Sucursal (Sin redondear)
+        # Diferencia Real Sucursal (Float)
         df[f'diff_{suc}'] = stock_suc_total - stock_obj_ideal
 
     return df
 
 def distribuir_stock(df):
     """
-    Define los envíos. AQUÍ transformamos la "Falta Real" y "Sobra Real" en "Cantidad de Cajas a Enviar".
+    Define los envíos aplicando lógica de cajas (Filtros) y juegos (No Filtros).
     """
     sucursales = ['ba', 'mdz', 'slt']
+    # Familias consideradas "Filtros" para lógica de cajas
+    familias_filtros = ['DONALDSON', 'TURBO', 'KTN'] 
     
     def calcular_fila(row):
-        lote = row['qty_piezas']
-        if pd.isna(lote) or lote <= 0: lote = 1
+        qty_p = row['qty_piezas']
+        if pd.isna(qty_p) or qty_p <= 0: qty_p = 1
         
-        # 1. Determinar Disponibilidad de Envío desde SF (Lógica Supply)
+        fam = row['familia_logica']
+        es_filtro = fam in familias_filtros
+        
+        # --- 1. DISPONIBILIDAD SANTA FE (PISO DEL SOBRANTE) ---
         diff_sf_real = row['diff_sf']
+        stock_fisico_sf = row['stock_total_sf_fisico']
         
         if diff_sf_real > 0:
-            # Disponibilidad: Usamos el entero hacia abajo, pero permitiendo el uso de stock
-            disponible_sf = math.floor(diff_sf_real)
+            if es_filtro:
+                # Lógica Filtros: Disponibilidad simple (floor)
+                disponible_sf = math.floor(diff_sf_real)
+            else:
+                # Lógica Kits (No Filtros):
+                # SF debe quedarse con stock suficiente para cubrir su demanda target 
+                # PERO en múltiplos de juegos completos (qty_piezas).
+                # Calculamos cuánto necesita SF redondeado hacia arriba al próximo kit.
+                demanda_sf = row['demanda_estimada_sf']
+                target_sf_cob = row['target_sf_eff'] # Cobertura efectiva usada
+                stock_target_sf = demanda_sf * target_sf_cob
+                
+                # Cuántos kits completos necesita retener SF para estar cubierto
+                kits_necesarios_sf = math.ceil(stock_target_sf / qty_p)
+                stock_retencion_sf = kits_necesarios_sf * qty_p
+                
+                # Lo que sobra por encima de la retención de kits
+                # Usamos el stock calculado (fisico+transito) que es el que se usó para diff_sf
+                stock_calculo_sf = row['diff_sf'] + stock_target_sf # Reconstrucción inversa o usar cols directas
+                # Mejor usar directamente la resta lógica:
+                # Disponible = Stock_Total_SF - Retencion_Kits
+                # (Asumiendo que diff_sf se calculó sobre stock_calculo_sf)
+                stock_total_sf = row['stock_total_sf_fisico'] + row.get('qty_ee_transito_sf', 0)
+                
+                disponible_teorico = stock_total_sf - stock_retencion_sf
+                disponible_sf = max(0, int(disponible_teorico))
+                
         else:
             disponible_sf = 0
         
-        # --- PROTECCIÓN DE INTEGRIDAD SF (No romper el último juego físico) ---
-        stock_fisico_sf = row['stock_total_sf_fisico']
-        
-        if lote > 1 and stock_fisico_sf >= lote:
-            # Lo máximo que puede dar es (StockFisico - 1 Caja) para no quedarse con una caja rota inutilizable si es política
-            maximo_dable_seguridad = max(0, stock_fisico_sf - lote)
-            disponible_sf = min(disponible_sf, maximo_dable_seguridad)
-        # -----------------------------------------------
+        # Seguridad: Nunca enviar más de lo que hay físicamente
+        disponible_sf = min(disponible_sf, stock_fisico_sf)
         
         envios_deseados = {}
         total_deseado = 0
         
-        # 2. Calcular NECESIDADES de envío (Lógica Demand)
+        # --- 2. NECESIDAD SUCURSALES (TECHO DEL FALTANTE) ---
         for suc in sucursales:
             diferencia_real = row.get(f'diff_{suc}', 0)
             
             if diferencia_real < 0:
-                falta_real = abs(diferencia_real)
+                # Necesidad base: Techo del faltante (Ceil)
+                falta_base = math.ceil(abs(diferencia_real))
                 
-                # APLICAMOS LÓGICA FLEXIBLE PARA TODOS (Sin distinción de familia)
-                # Esto soluciona el problema de que Donaldson/Turbo redondeen a 0 cuando falta casi 1 caja.
-                qty_a_pedir = calcular_qty_a_pedir(falta_real, lote)
+                qty_a_pedir = 0
+                
+                if es_filtro:
+                    # --- LÓGICA FILTROS (Cajas) ---
+                    # Ajustar a caja completa SOLO si falta poco
+                    qty_a_pedir = calcular_qty_filtros(falta_base, qty_p)
+                else:
+                    # --- LÓGICA KITS (Juegos) ---
+                    # Completar juego en destino
+                    col_stock = f'stock_{suc}'
+                    col_trans = f'qty_transito_{suc}' if suc != 'slt' else 'qty_ot_transito_slt'
+                    stock_suc_actual = row.get(col_stock, 0) + row.get(col_trans, 0)
+                    
+                    qty_a_pedir = calcular_qty_kits(falta_base, stock_suc_actual, qty_p)
                 
                 envios_deseados[suc] = qty_a_pedir
                 total_deseado += qty_a_pedir
             else:
                 envios_deseados[suc] = 0
         
-        # 3. Distribuir lo disponible proporcionalmente
+        # --- 3. DISTRIBUCIÓN ---
         envios_finales = {suc: 0 for suc in sucursales}
         
         if disponible_sf <= 0:
             return pd.Series(envios_finales)
             
         if disponible_sf >= total_deseado:
-            # Hay suficiente para cubrir todos los deseos calculados
             for suc, qty in envios_deseados.items():
                 envios_finales[suc] = qty
             return pd.Series(envios_finales)
             
+        # Escasez: Prorratear (Waterfall simple o proporcional entero)
         if total_deseado > 0:
-            # Escasez: Prorratear
             ratio = disponible_sf / total_deseado
             acumulado = 0
             for suc, qty_deseada in envios_deseados.items():
                 if qty_deseada > 0:
-                    cantidad_proporcional = qty_deseada * ratio
-                    # Al prorratear en escasez, priorizamos enviar unidades enteras
-                    cantidad_reale = math.floor(cantidad_proporcional)
-                    
-                    if (acumulado + cantidad_reale) <= disponible_sf:
-                        envios_finales[suc] = cantidad_reale
-                        acumulado += cantidad_reale
+                    cant_prop = math.floor(qty_deseada * ratio)
+                    if (acumulado + cant_prop) <= disponible_sf:
+                        envios_finales[suc] = cant_prop
+                        acumulado += cant_prop
                     else:
-                        remanente = disponible_sf - acumulado
-                        envios_finales[suc] = remanente
-                        acumulado += remanente
+                        rem = disponible_sf - acumulado
+                        envios_finales[suc] = rem
+                        acumulado += rem
         
         return pd.Series(envios_finales)
 
     cols_envios = df.apply(calcular_fila, axis=1)
-    
     for suc in sucursales:
         df[f'final_enviar_{suc}'] = cols_envios[suc]
 
     return df
 
-def calcular_qty_a_pedir(necesidad, lote):
+def calcular_qty_filtros(necesidad, lote):
     """
-    Lógica de redondeo flexible unificada.
-    Objetivo: Acercarse a cajas cerradas si es posible, pero permitir romper caja
-    si la necesidad es muy específica o si el redondeo perjudica el abastecimiento.
+    Regla Filtros:
+    - Caja 6: Completar si tengo 4 o 5 (falta 1 o 2 para llegar a 6).
+    - Caja 12: Completar si tengo 9, 10, 11 (falta 1, 2 o 3 para llegar a 12).
     """
-    if pd.isna(lote) or lote <= 1: return necesidad
+    if lote <= 1: return necesidad
     
-    # 1. Calcular cajas teóricas (Redondeo matemático estándar: 1.6 -> 2, 1.4 -> 1)
-    cajas_teoricas = necesidad / lote
-    cajas_redondeadas = round(cajas_teoricas)
-    qty_redondeada = cajas_redondeadas * lote
+    # Cuántas unidades sueltas tengo en esa necesidad teórica
+    # (Ej: Necesito 16, Lote 6 -> 2 cajas (12) + 4 sueltas)
+    resto = necesidad % lote
     
-    # 2. Verificar cuánto nos desviamos de la necesidad real
-    diferencia = abs(necesidad - qty_redondeada)
-    
-    # Umbral de tolerancia: 30% del tamaño de la caja
-    # Si la diferencia es menor al 30%, aceptamos la caja cerrada.
-    umbral = lote * 0.30
-    
-    if diferencia <= umbral:
-        # Caso especial: El redondeo da 0 (ej: necesidad 4, lote 12 -> round(0.33)=0)
-        # Si la necesidad es "relevante" (> 25% de la caja), NO mandamos 0, mandamos exacto.
-        if qty_redondeada == 0 and necesidad >= (lote * 0.25):
-            return necesidad # Rompemos caja y mandamos 4 unidades
+    if resto == 0:
+        return necesidad # Ya es múltiplo
         
-        return qty_redondeada # Mandamos cajas cerradas (ej: need 11, lote 12 -> 12)
-    else:
-        # Si la diferencia es muy grande (ej: need 18, lote 12 -> round=24, diff=6, umbral=3.6)
-        # Significa que estamos "en el medio". Mandamos la cantidad exacta.
-        return necesidad
+    adicional_para_cerrar = lote - resto
+    
+    if lote == 6:
+        # Si tengo 4 o 5 (faltan 2 o 1), cierro caja
+        if adicional_para_cerrar <= 2:
+            return necesidad + adicional_para_cerrar
+    elif lote == 12:
+        # Si tengo 9, 10, 11 (faltan 3, 2 o 1), cierro caja
+        if adicional_para_cerrar <= 3:
+            return necesidad + adicional_para_cerrar
+            
+    # Si no cumple condición de cierre, mando necesidad exacta (rompiendo caja en origen)
+    return necesidad
+
+def calcular_qty_kits(necesidad_base, stock_actual, lote):
+    """
+    Regla Kits (No Filtros):
+    (Stock_Actual + Envio) debe ser múltiplo de Lote (Juego).
+    """
+    if lote <= 1: return necesidad_base
+    
+    objetivo_minimo = stock_actual + necesidad_base
+    
+    # Buscar el siguiente múltiplo de lote que cubra el objetivo
+    # ceil(15 / 6) * 6 = 3 * 6 = 18
+    kits_necesarios = math.ceil(objetivo_minimo / lote)
+    stock_final_deseado = kits_necesarios * lote
+    
+    envio_calculado = stock_final_deseado - stock_actual
+    
+    # Corrección: Si el stock actual ya cubre la necesidad (raro si entramos aquí), no pedir negativo
+    return max(0, int(envio_calculado))
 
 def calcular_excedentes_sucursales(df, umbral_meses_exceso=0.5):
-    """
-    Identifica excedentes en sucursales.
-    """
+    """ Identifica excedentes en sucursales. """
     sucursales = ['ba', 'mdz', 'slt']
-    
     for c in ['peso', 'volumen']:
         df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
+    # Contexto SF
     obj_sf = 0.5 
     stock_sf_total = df['stock_total_sf_fisico'] + df.get('qty_ee_transito_sf', 0)
     target_sf = df['demanda_estimada_sf'] * obj_sf
