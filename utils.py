@@ -118,7 +118,7 @@ def aplicar_filtros_avanzados(df, ignorar_inhabilitados, ignorar_sin_stock, igno
 
     # --- CAMBIO 3: Filtro DNS ---
     if ignorar_dns and 'grupo_stock_norm' in df_filtrado.columns:
-        valores_dns = ['DNS - A DEMANDA', 'DNS - INMOVILIZADO', 'Turbo - Inmovilizado', 'Filtros KTN - Inmovilizado', 'Turbo - A Demanda']
+        valores_dns = ['DNS - A DEMANDA', 'DNS - INMOVILIZADO', 'TURBO - INMOVILIZADO', 'FILTROS KTN - INMOVILIZADO', 'TURBO - A DEMANDA']
         # Excluimos si contiene esos textos
         df_filtrado = df_filtrado[~df_filtrado['grupo_stock_norm'].isin(valores_dns)]
 

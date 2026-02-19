@@ -115,7 +115,7 @@ with st.sidebar:
         ignorar_sin_stock = st.checkbox("Ignorar Sin Stock", value=True)
         ignorar_sin_demanda = st.checkbox("Ignorar Sin Demanda", value=True)
         # NUEVO FILTRO DNS
-        ignorar_dns = st.checkbox("Ignorar DNS (Inmovilizado/A Demanda)", value=True, help="Excluye items con Grupo Stock 'DNS - A Demanda' o 'DNS - Inmovilizado'")
+        ignorar_dns = st.checkbox("IgnorarInmovilizado/A Demanda)", value=True, help="Excluye items con Grupo Stock 'DNS - A Demanda' o 'DNS - Inmovilizado'")
 
     # Sección 2: Filtro de Familias
     st.subheader("🗂️ Familias Lógicas")
@@ -130,22 +130,38 @@ with st.sidebar:
 
     # Parametros según modo
     if modo_analisis == "Reposición (Envío)":
+        st.subheader("📍 Sucursal Origen")
+        sucursal_origen = st.selectbox(
+            "Seleccione Origen:",
+            ["SF", "BA", "MDZ", "SLT"],
+            index=0,
+            help="Sucursal desde donde se enviará el stock"
+        )
+
         st.subheader("📊 Lógica de Demanda")
         metodo_demanda = st.radio(
-            "Método Estimación:", 
-            ('A', 'B'), 
+            "Método Estimación:",
+            ('A', 'B'),
             index=1, # Default B
             horizontal=True,
             help="**Método A (Teórico):** Basado en parque de máquinas (Population) y coeficientes de familia.\n\n**Método B (Histórico):** Basado en histórico de ventas/reemplazos reciente (Recomendado)."
         )
 
-        st.subheader("🎯 Coberturas (En años)")
-        cob_sf = st.number_input("Objetivo Santa Fe", value=0.5, step=0.05, help="0.5 = 6 meses")
-        st.markdown("<small>Objetivos Sucursales</small>", unsafe_allow_html=True)
-        c1, c2, c3 = st.columns(3)
-        cob_ba = c1.number_input("BA", value=0.33, step=0.05)
-        cob_mdz = c2.number_input("MDZ", value=0.33, step=0.05)
-        cob_slt = c3.number_input("SLT", value=0.33, step=0.05)
+        st.subheader("🎯 Coberturas (En meses)")
+        cob_origen_meses = st.number_input(
+            f"Cobertura Objetivo {sucursal_origen}",
+            value=6.0,
+            step=0.5,
+            min_value=0.0,
+            help="Cobertura en meses que debe mantener la sucursal origen"
+        )
+        cob_destino_meses = st.number_input(
+            "Cobertura Objetivo Destinos",
+            value=4.0,
+            step=0.5,
+            min_value=0.0,
+            help="Cobertura en meses para todas las sucursales destino"
+        )
         
     else:
         # Parametros modo Devolución
@@ -175,8 +191,13 @@ with st.sidebar:
 col_header_1, col_header_2 = st.columns([3, 1])
 with col_header_1:
     if modo_analisis == "Reposición (Envío)":
-        st.title("📦 Reposiciones: SF ➔ Sucursales")
-        st.markdown("Cálculo de envíos para abastecer la red.")
+        # Título dinámico según sucursal origen
+        if 'sucursal_origen' in locals():
+            st.title(f"📦 Reposiciones: {sucursal_origen} ➔ Red")
+            st.markdown(f"Cálculo de envíos desde {sucursal_origen} para abastecer la red.")
+        else:
+            st.title("📦 Reposiciones: Configurar Origen")
+            st.markdown("Seleccione la sucursal origen en el panel lateral.")
     else:
         st.title("↩️ Devoluciones: Sucursales ➔ SF")
         st.markdown("Análisis de stock inmovilizado y oportunidades de retorno.")
@@ -244,28 +265,45 @@ else:
                             #                 MODO REPOSICIÓN
                             # ----------------------------------------------------
                             if modo_analisis == "Reposición (Envío)":
-                                df_proc = logic.calcular_coberturas(df_proc, cob_sf, cob_ba, cob_mdz, cob_slt)
-                                df_final = logic.distribuir_stock(df_proc)
-                                
-                                # Cálculos Extra Visuales
-                                for col in ['qty_ee_transito_sf', 'qty_ot_transito_sf']:
-                                    if col not in df_final.columns: df_final[col] = 0
-                                stock_ampliado_sf = df_final['stock_total_sf_fisico'] + df_final['qty_ee_transito_sf'] + df_final['qty_ot_transito_sf']
-                                
-                                df_final['cobertura_ampliada_sf'] = stock_ampliado_sf / df_final['demanda_estimada_sf']
+                                df_proc = logic.calcular_coberturas(
+                                    df_proc,
+                                    sucursal_origen=sucursal_origen.lower(),
+                                    cob_origen_meses=cob_origen_meses,
+                                    cob_destino_meses=cob_destino_meses
+                                )
+                                df_final = logic.distribuir_stock(df_proc, sucursal_origen=sucursal_origen.lower())
 
-                                # --- CÁLCULO DE COBERTURAS FINALES (Post Envío) ---
-                                for suc in ['ba', 'mdz', 'slt']:
-                                    col_stock = f'stock_{suc}'
-                                    col_transito = f'qty_transito_{suc}' if suc != 'slt' else 'qty_ot_transito_slt'
+                                # Determinar sucursales destino para cálculos
+                                todas_sucursales = ['SF', 'BA', 'MDZ', 'SLT']
+                                sucursales_destino_view = [s for s in todas_sucursales if s != sucursal_origen.upper()]
+
+                                # Asegurar que existan columnas de tránsito
+                                for col in ['qty_sf', 'qty_ba', 'qty_mdz', 'qty_slt',
+                                           'qty_ot_transito_sf', 'qty_ot_transito_ba',
+                                           'qty_ot_transito_mdz', 'qty_ot_transito_slt']:
+                                    if col not in df_final.columns:
+                                        df_final[col] = 0
+
+                                # --- CÁLCULO DE COBERTURAS FINALES (Post Envío) - DINÁMICO ---
+                                for suc in [s.lower() for s in sucursales_destino_view]:
+                                    # Determinar columnas según la sucursal
+                                    if suc == 'sf':
+                                        col_stock = 'stock_total_sf_fisico'
+                                        col_transito = 'qty_ot_transito_sf'
+                                    else:
+                                        col_stock = f'stock_{suc}'
+                                        col_transito = f'qty_ot_transito_{suc}'
+
                                     col_envio = f'final_enviar_{suc}'
                                     col_demanda = f'demanda_estimada_{suc}'
-                                    
-                                    # Stock Final = Stock Actual + Transito + Envio Nuevo
-                                    stock_final = df_final[col_stock] + df_final.get(col_transito, 0) + df_final[col_envio]
-                                    
-                                    # Evitar division por cero (demanda 0 -> inf)
-                                    df_final[f'cobertura_fin_{suc}'] = stock_final / df_final[col_demanda].replace(0, 0.0001)
+
+                                    # Verificar que existan las columnas
+                                    if col_stock in df_final.columns and col_envio in df_final.columns:
+                                        # Stock Final = Stock Actual + Transito OT + Envio Nuevo
+                                        stock_final = df_final[col_stock] + df_final.get(col_transito, 0) + df_final[col_envio]
+
+                                        # Evitar division por cero (demanda 0 -> inf)
+                                        df_final[f'cobertura_fin_{suc}'] = stock_final / df_final[col_demanda].replace(0, 0.0001)
 
                                 # --- LIMPIEZA DE DECIMALES ---
                                 # Ajuste solicitado: NO convertir 'diff' a int, sino redondear a 2 decimales.
@@ -313,7 +351,11 @@ else:
                 # REPOSICIÓN
                 if modo_analisis == "Reposición (Envío)":
                     df_final = st.session_state.data_calculada
-                    
+
+                    # --- DETERMINAR SUCURSALES DESTINO DINÁMICAMENTE ---
+                    todas_sucursales = ['SF', 'BA', 'MDZ', 'SLT']
+                    sucursales_destino_view = [s for s in todas_sucursales if s != sucursal_origen.upper()]
+
                     # --- PREPARACIÓN DE DATOS PARA VISTA PRINCIPAL ---
                     column_map = {
                         'familia_logica': 'Familia Logica',
@@ -344,7 +386,7 @@ else:
                         'stock_sv_arg': 'Stock SV ARG',
                         'stock_sv_min': 'Stock SV MIN',
                         'stock_ns_noa': 'Stock NS NOA',
-                        'qty_ee_transito_sf': 'Transito EE SF',
+                        'qty_sf': 'Transito EE SF',
                         'qty_ot_transito_sf': 'Transito OT SF',
                         'cobertura_ini_sf': 'cobertura inicial SF',
                         'cobertura_ampliada_sf': 'Cobertura Ampliada SF',
@@ -354,8 +396,10 @@ else:
                         'qremba': 'QRemBA',
                         'demanda_estimada_ba': 'D.EST BA',
                         'stock_ba': 'Stock BA',
-                        'qty_transito_ba': 'Transito BA',
+                        'qty_ot_transito_ba': 'Transito OT BA',
+                        'qty_ba': 'Envío Entrante BA',
                         'cobertura_ini_ba': 'cobertura inicial BA',
+                        'cobertura_ampliada_ba': 'Cobertura Ampliada BA',
                         'diff_ba': 'Sobra / Falta BA',
                         'final_enviar_ba': 'q enviar BA',
                         # MDZ
@@ -363,8 +407,10 @@ else:
                         'qremmdz': 'QRemMDZ',
                         'demanda_estimada_mdz': 'D.EST MDZ',
                         'stock_mdz': 'Stock MDZ',
-                        'qty_transito_mdz': 'Transito MDZ',
+                        'qty_ot_transito_mdz': 'Transito OT MDZ',
+                        'qty_mdz': 'Envío Entrante MDZ',
                         'cobertura_ini_mdz': 'cobertura inicial MDZ',
+                        'cobertura_ampliada_mdz': 'Cobertura Ampliada MDZ',
                         'diff_mdz': 'Sobra / Falta MDZ',
                         'final_enviar_mdz': 'q enviar MDZ',
                         # SLT
@@ -373,24 +419,32 @@ else:
                         'demanda_estimada_slt': 'D.EST SLT',
                         'stock_slt': 'Stock SLT',
                         'qty_ot_transito_slt': 'Transito OT SLT',
+                        'qty_slt': 'Envío Entrante SLT',
                         'cobertura_ini_slt': 'cobertura inicial SLT',
+                        'cobertura_ampliada_slt': 'Cobertura Ampliada SLT',
                         'diff_slt': 'Sobra / Falta SLT',
-                        'final_enviar_slt': 'q enviar SLT'
+                        'final_enviar_slt': 'q enviar SLT',
+                        # SF (cuando es destino)
+                        'final_enviar_sf': 'q enviar SF',
+                        'cobertura_fin_sf': 'Cob. Fin SF'
                     }
                     
                     final_order = [
-                        'Familia Logica', 'Familia', 'Subfamilia', 'Subfamilia2', 'Grupo Stock', 'Codigo', 'Descripcion', 'Descripcion2', 
-                        'qty piezas', 'peso', 'volumen', 'q pres total', 'q rem total', 'Wproducto', 'Wfamilia', 'd est total', 
-                        'stock total', 'cobertura total', 
-                        'q pres SF', 'Q rem SF', 'D est SF', 
-                        'Stock SF', 'Stock Aux', 'Stock SV ARG', 'Stock SV MIN', 'Stock NS NOA', 
-                        'Transito EE SF', 'Transito OT SF', 
-                        'Stock SF Final', 
-                        'cobertura inicial SF', 'Cobertura Ampliada SF', 
-                        'Sobra/Falta SF',
-                        'QPresBA', 'QRemBA', 'D.EST BA', 'Stock BA', 'Transito BA', 'cobertura inicial BA', 'Sobra / Falta BA', 'q enviar BA',
-                        'QPresMDZ', 'QRemMDZ', 'D.EST MDZ', 'Stock MDZ', 'Transito MDZ', 'cobertura inicial MDZ', 'Sobra / Falta MDZ', 'q enviar MDZ',
-                        'QPresSLT', 'QRemSLT', 'D.EST SLT', 'Stock SLT', 'Transito OT SLT', 'cobertura inicial SLT', 'Sobra / Falta SLT', 'q enviar SLT'
+                        'Familia Logica', 'Familia', 'Subfamilia', 'Subfamilia2', 'Grupo Stock', 'Codigo', 'Descripcion', 'Descripcion2',
+                        'qty piezas', 'peso', 'volumen', 'q pres total', 'q rem total', 'Wproducto', 'Wfamilia', 'd est total',
+                        'stock total', 'cobertura total',
+                        'q pres SF', 'Q rem SF', 'D est SF',
+                        'Stock SF', 'Stock Aux', 'Stock SV ARG', 'Stock SV MIN', 'Stock NS NOA',
+                        'Transito EE SF', 'Transito OT SF',
+                        'Stock SF Final',
+                        'cobertura inicial SF', 'Cobertura Ampliada SF',
+                        'Sobra/Falta SF', 'q enviar SF',
+                        'QPresBA', 'QRemBA', 'D.EST BA', 'Stock BA', 'Transito OT BA', 'Envío Entrante BA',
+                        'cobertura inicial BA', 'Cobertura Ampliada BA', 'Sobra / Falta BA', 'q enviar BA',
+                        'QPresMDZ', 'QRemMDZ', 'D.EST MDZ', 'Stock MDZ', 'Transito OT MDZ', 'Envío Entrante MDZ',
+                        'cobertura inicial MDZ', 'Cobertura Ampliada MDZ', 'Sobra / Falta MDZ', 'q enviar MDZ',
+                        'QPresSLT', 'QRemSLT', 'D.EST SLT', 'Stock SLT', 'Transito OT SLT', 'Envío Entrante SLT',
+                        'cobertura inicial SLT', 'Cobertura Ampliada SLT', 'Sobra / Falta SLT', 'q enviar SLT'
                     ]
                     
                     # Relleno de columnas faltantes visuales
@@ -417,34 +471,49 @@ else:
                         'qpressf': 'QPresSF',
                         'qremsf': 'QRemSF',
                         'demanda_estimada_sf': 'D.EST SF',
-                        'stock_total_sf_fisico': 'STOCK SF FINAL',
+                        'stock_total_sf_fisico': 'Stock SF Físico',
+                        'qty_sf': 'Envío Entrante SF',
+                        'qty_ot_transito_sf': 'Tránsito OT SF',
+                        'cobertura_ini_sf': 'Cob. Ini SF',
+                        'cobertura_ampliada_sf': 'Cob. Ampliada SF',
                         'diff_sf': 'Sobra / Falta SF',
+                        'final_enviar_sf': 'Cant. Enviar SF',
+                        'cobertura_fin_sf': 'Cob. Fin SF',
                         # BA
                         'qpresba': 'QPresBA',
                         'qremba': 'QRemBA',
                         'demanda_estimada_ba': 'D.EST BA',
                         'stock_ba': 'Stock BA',
+                        'qty_ot_transito_ba': 'Tránsito OT BA',
+                        'qty_ba': 'Envío Entrante BA',
+                        'cobertura_ini_ba': 'Cob. Ini BA',
+                        'cobertura_ampliada_ba': 'Cob. Ampliada BA',
                         'diff_ba': 'Sobra / Falta BA',
                         'final_enviar_ba': 'Cant. Enviar BA',
-                        'cobertura_ini_ba': 'Cob. Ini BA',
                         'cobertura_fin_ba': 'Cob. Fin BA',
                         # MDZ
                         'qpresmdz': 'QPresMDZ',
                         'qremmdz': 'QRemMDZ',
                         'demanda_estimada_mdz': 'D.EST MDZ',
-                        'stock_mdz': 'STOCK MDZ FINAL',
+                        'stock_mdz': 'Stock MDZ',
+                        'qty_ot_transito_mdz': 'Tránsito OT MDZ',
+                        'qty_mdz': 'Envío Entrante MDZ',
+                        'cobertura_ini_mdz': 'Cob. Ini MDZ',
+                        'cobertura_ampliada_mdz': 'Cob. Ampliada MDZ',
                         'diff_mdz': 'Sobra / Falta MDZ',
                         'final_enviar_mdz': 'Cant. Enviar MDZ',
-                        'cobertura_ini_mdz': 'Cob. Ini MDZ',
                         'cobertura_fin_mdz': 'Cob. Fin MDZ',
                         # SLT
                         'qpresslt': 'QPresSLT',
                         'qremslt': 'QRemSLT',
                         'demanda_estimada_slt': 'D.EST SALTA',
                         'stock_slt': 'Stock SLT',
+                        'qty_slt': 'Envío Entrante SLT',
+                        'qty_ot_transito_slt': 'Tránsito OT SLT',
+                        'cobertura_ini_slt': 'Cob. Ini SLT',
+                        'cobertura_ampliada_slt': 'Cob. Ampliada SLT',
                         'diff_slt': 'Sobra / Falta SLT',
                         'final_enviar_slt': 'Cant. Enviar SLT',
-                        'cobertura_ini_slt': 'Cob. Ini SLT',
                         'cobertura_fin_slt': 'Cob. Fin SLT'
                     }
                     
@@ -468,38 +537,51 @@ else:
                     df_view['peso'] = pd.to_numeric(df_view['peso'], errors='coerce').fillna(0)
                     df_view['volumen'] = pd.to_numeric(df_view['volumen'], errors='coerce').fillna(0)
                     
-                    # Pre-cálculo de columnas de totales para resumen
-                    for suc in ['BA', 'MDZ', 'SLT']:
+                    # Pre-cálculo de columnas de totales para resumen (dinámico)
+                    for suc in sucursales_destino_view:
                         col_envio = f'q enviar {suc}'
+                        # Verificar si existe la columna de envío
+                        if col_envio not in df_view.columns:
+                            continue
+
                         df_view[f'peso_total_{suc}'] = df_view[col_envio] * df_view['peso']
                         df_view[f'vol_total_{suc}'] = df_view[col_envio] * df_view['volumen']
 
                         # Lógica de riesgo
                         col_demanda_orig = f'demanda_estimada_{suc.lower()}'
-                        col_stock_orig = f'stock_{suc.lower()}'
-                        col_transito_orig = f'qty_transito_{suc.lower()}' if suc.lower() != 'slt' else 'qty_ot_transito_slt'
+                        if suc.upper() == 'SF':
+                            col_stock_orig = 'stock_total_sf_fisico'
+                            col_transito_orig = 'qty_ot_transito_sf'
+                        else:
+                            col_stock_orig = f'stock_{suc.lower()}'
+                            col_transito_orig = f'qty_ot_transito_{suc.lower()}'
                         col_enviar_orig = f'final_enviar_{suc.lower()}'
-                        
-                        stock_actual = df_final[col_stock_orig] + df_final.get(col_transito_orig, 0)
-                        demanda = df_final[col_demanda_orig]
-                        
-                        cob_antes = stock_actual / demanda
-                        cob_despues = (stock_actual + df_final[col_enviar_orig]) / demanda
-                        
-                        df_view[f'risk_antes_{suc}'] = cob_antes < 0.0833 
-                        df_view[f'salvados_{suc}'] = (df_view[f'risk_antes_{suc}']) & (cob_despues >= 0.0833)
+
+                        # Verificar que existan las columnas necesarias
+                        if col_stock_orig in df_final.columns and col_demanda_orig in df_final.columns:
+                            stock_actual = df_final[col_stock_orig] + df_final.get(col_transito_orig, 0)
+                            demanda = df_final[col_demanda_orig]
+
+                            cob_antes = stock_actual / demanda.replace(0, 0.00001)
+                            cob_despues = (stock_actual + df_final.get(col_enviar_orig, 0)) / demanda.replace(0, 0.00001)
+
+                            df_view[f'risk_antes_{suc}'] = cob_antes < 0.0833
+                            df_view[f'salvados_{suc}'] = (df_view[f'risk_antes_{suc}']) & (cob_despues >= 0.0833)
 
                     # PREPARAR DATA PARA DESCARGA (Limpieza de columnas visuales)
                     cols_mostrar = [c for c in df_view.columns if 'risk_' not in c and 'salvados_' not in c and 'peso_total' not in c and 'vol_total' not in c]
                     df_display_final = df_view[cols_mostrar]
 
-                    # --- TABS DE SUCURSALES ---
-                    sucursales_view = ['BA', 'MDZ', 'SLT']
-                    tabs = st.tabs([f"📍 {s}" for s in sucursales_view])
-                    
-                    for i, suc in enumerate(sucursales_view):
+                    # --- TABS DE SUCURSALES (DINÁMICO SEGÚN ORIGEN) ---
+                    tabs = st.tabs([f"📍 {s}" for s in sucursales_destino_view])
+
+                    for i, suc in enumerate(sucursales_destino_view):
                         with tabs[i]:
                             col_envio = f'q enviar {suc}'
+                            # Verificar si la columna existe en el dataframe
+                            if col_envio not in df_view.columns:
+                                st.warning(f"No hay datos de envío para {suc}")
+                                continue
                             df_suc = df_view[df_view[col_envio] > 0]
                             
                             # Tarjetas de Métricas (KPIs)
@@ -612,33 +694,130 @@ else:
                     st.markdown("### 📥 Descargas Globales")
                     c_down1, c_down2, c_down3 = st.columns([1, 1, 1])
                     
-                    # Descarga Resumen (EXCEL)
+                    # Descarga Resumen (EXCEL CON FORMATO)
                     with c_down1:
                         buffer = io.BytesIO()
                         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                             df_resumen.to_excel(writer, index=False, sheet_name='Resumen')
-                        
+
+                            # Obtener el workbook y worksheet para aplicar formato
+                            workbook = writer.book
+                            worksheet = writer.sheets['Resumen']
+
+                            # Definir formatos con colores pasteles
+                            fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})  # Azul claro
+                            fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})  # Azul más oscuro
+
+                            fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})  # Verde claro
+                            fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})  # Verde más oscuro
+
+                            fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})  # Naranja claro
+                            fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})  # Naranja más oscuro
+
+                            fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})  # Rosa claro
+                            fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})  # Rosa más oscuro
+
+                            fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})  # Turquesa claro
+                            fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})  # Turquesa más oscuro
+
+                            # Aplicar formato por columnas usando set_column
+                            # Rango A-Q (0-16): col 0-16 con fmt_rango1, col 17 (R) con fmt_rango1_last
+                            for col in range(0, min(17, len(df_resumen.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango1)
+                            if len(df_resumen.columns) > 17:
+                                worksheet.set_column(17, 17, None, fmt_rango1_last)
+
+                            # Rango S-AF (18-31): col 18-31 con fmt_rango2, col 32 (AG) con fmt_rango2_last
+                            for col in range(18, min(32, len(df_resumen.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango2)
+                            if len(df_resumen.columns) > 32:
+                                worksheet.set_column(32, 32, None, fmt_rango2_last)
+
+                            # Rango AH-AP (33-41): col 33-41 con fmt_rango3, col 42 (AQ) con fmt_rango3_last
+                            for col in range(33, min(42, len(df_resumen.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango3)
+                            if len(df_resumen.columns) > 42:
+                                worksheet.set_column(42, 42, None, fmt_rango3_last)
+
+                            # Rango AR-AZ (43-51): col 43-51 con fmt_rango4, col 52 (BA) con fmt_rango4_last
+                            for col in range(43, min(52, len(df_resumen.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango4)
+                            if len(df_resumen.columns) > 52:
+                                worksheet.set_column(52, 52, None, fmt_rango4_last)
+
+                            # Rango BB-BJ (53-61): col 53-61 con fmt_rango5, col 62 (BK) con fmt_rango5_last
+                            for col in range(53, min(62, len(df_resumen.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango5)
+                            if len(df_resumen.columns) > 62:
+                                worksheet.set_column(62, 62, None, fmt_rango5_last)
+
                         st.download_button(
-                            label="📋 DESCARGAR RESUMEN (.XLSX)", 
-                            data=buffer.getvalue(), 
-                            file_name="resumen_reposicion_global.xlsx", 
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                            label="📋 DESCARGAR RESUMEN (.XLSX)",
+                            data=buffer.getvalue(),
+                            file_name="resumen_reposicion_global.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             type="secondary",
                             use_container_width=True,
                             key="download_resumen_global"
                         )
 
-                    # Descarga Completa (EXCEL)
+                    # Descarga Completa (EXCEL CON FORMATO)
                     with c_down2:
                         buffer_comp = io.BytesIO()
                         with pd.ExcelWriter(buffer_comp, engine='xlsxwriter') as writer:
                             df_display_final.to_excel(writer, index=False, sheet_name='Detalle')
 
+                            # Aplicar mismo formato de colores al archivo completo
+                            workbook = writer.book
+                            worksheet = writer.sheets['Detalle']
+
+                            # Definir formatos con colores pasteles
+                            fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})
+                            fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})
+
+                            fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})
+                            fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})
+
+                            fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})
+                            fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})
+
+                            fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})
+                            fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})
+
+                            fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})
+                            fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})
+
+                            # Aplicar formato por rangos de columnas
+                            for col in range(0, min(17, len(df_display_final.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango1)
+                            if len(df_display_final.columns) > 17:
+                                worksheet.set_column(17, 17, None, fmt_rango1_last)
+
+                            for col in range(18, min(32, len(df_display_final.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango2)
+                            if len(df_display_final.columns) > 32:
+                                worksheet.set_column(32, 32, None, fmt_rango2_last)
+
+                            for col in range(33, min(42, len(df_display_final.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango3)
+                            if len(df_display_final.columns) > 42:
+                                worksheet.set_column(42, 42, None, fmt_rango3_last)
+
+                            for col in range(43, min(52, len(df_display_final.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango4)
+                            if len(df_display_final.columns) > 52:
+                                worksheet.set_column(52, 52, None, fmt_rango4_last)
+
+                            for col in range(53, min(62, len(df_display_final.columns))):
+                                worksheet.set_column(col, col, None, fmt_rango5)
+                            if len(df_display_final.columns) > 62:
+                                worksheet.set_column(62, 62, None, fmt_rango5_last)
+
                         st.download_button(
-                            label="💾 DESCARGAR COMPLETA (.XLSX)", 
-                            data=buffer_comp.getvalue(), 
-                            file_name="resultado_reposicion_global.xlsx", 
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                            label="💾 DESCARGAR COMPLETA (.XLSX)",
+                            data=buffer_comp.getvalue(),
+                            file_name="resultado_reposicion_global.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             type="primary",
                             use_container_width=True,
                             key="download_repo_global"
@@ -730,12 +909,58 @@ else:
                                     })
                                     st.dataframe(df_show_sku, use_container_width=True)
 
-                    # Descarga Global de Devoluciones (EXCEL)
+                    # Descarga Global de Devoluciones (EXCEL CON FORMATO)
                     st.divider()
                     st.markdown("### 📥 Descargas Globales")
                     buffer_dev = io.BytesIO()
                     with pd.ExcelWriter(buffer_dev, engine='xlsxwriter') as writer:
                         df_dev.to_excel(writer, index=False, sheet_name='Excedentes')
+
+                        # Aplicar formato de colores
+                        workbook = writer.book
+                        worksheet = writer.sheets['Excedentes']
+
+                        # Definir formatos con colores pasteles
+                        fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})
+                        fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})
+
+                        fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})
+                        fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})
+
+                        fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})
+                        fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})
+
+                        fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})
+                        fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})
+
+                        fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})
+                        fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})
+
+                        # Aplicar formato por rangos de columnas
+                        for col in range(0, min(17, len(df_dev.columns))):
+                            worksheet.set_column(col, col, None, fmt_rango1)
+                        if len(df_dev.columns) > 17:
+                            worksheet.set_column(17, 17, None, fmt_rango1_last)
+
+                        for col in range(18, min(32, len(df_dev.columns))):
+                            worksheet.set_column(col, col, None, fmt_rango2)
+                        if len(df_dev.columns) > 32:
+                            worksheet.set_column(32, 32, None, fmt_rango2_last)
+
+                        for col in range(33, min(42, len(df_dev.columns))):
+                            worksheet.set_column(col, col, None, fmt_rango3)
+                        if len(df_dev.columns) > 42:
+                            worksheet.set_column(42, 42, None, fmt_rango3_last)
+
+                        for col in range(43, min(52, len(df_dev.columns))):
+                            worksheet.set_column(col, col, None, fmt_rango4)
+                        if len(df_dev.columns) > 52:
+                            worksheet.set_column(52, 52, None, fmt_rango4_last)
+
+                        for col in range(53, min(62, len(df_dev.columns))):
+                            worksheet.set_column(col, col, None, fmt_rango5)
+                        if len(df_dev.columns) > 62:
+                            worksheet.set_column(62, 62, None, fmt_rango5_last)
 
                     st.download_button(
                         "💾 Descargar Reporte de Excedentes (.XLSX)",
