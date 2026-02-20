@@ -20,7 +20,7 @@ def determinar_familia_logica(row):
         return 'TURBO'
     elif 'IMPORTADOS' in sf and 'FILTROS KTN' in sf2:
         return 'KTN'
-    elif 'CAT ALTERNATIVO' in sf2 or 'NORDIC LIGHTS' in sf:
+    elif 'CAT ALTERNATIVO' in sf2 or 'REPUESTOS KTN' in sf2 or 'NORDIC LIGHTS' in sf:
         return 'REPUESTOS'
     else:
         return 'OTROS'
