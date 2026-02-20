@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import logic
 import utils
-import io # Necesario para manejar el archivo binario de Excel
+import io
+import os
 
 # Configuración de página con un layout más amplio
 st.set_page_config(
@@ -90,10 +91,63 @@ if 'data_calculada' not in st.session_state:
     st.session_state.data_calculada = None
 if 'modo_calculado' not in st.session_state:
     st.session_state.modo_calculado = None
+if 'show_docs' not in st.session_state:
+    st.session_state.show_docs = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCIÓN: Mostrar documentación en el área principal
+# ─────────────────────────────────────────────────────────────────────────────
+def mostrar_documentacion():
+    """
+    Lee y renderiza el archivo documentacion_reposicion.md en el área principal.
+    También ofrece descarga del Word (.docx) si está disponible.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    doc_md_path   = os.path.join(base_dir, "documentacion_reposicion.md")
+    doc_docx_path = os.path.join(base_dir, "documentacion_reposicion.docx")
+
+    col_title, col_back = st.columns([5, 1])
+    with col_title:
+        st.title("📖 Manual de Usuario")
+        st.caption("Documentación interna — Módulo de Reposición y Devoluciones")
+    with col_back:
+        st.write("")
+        st.write("")
+        if st.button("← Volver a la app", use_container_width=True):
+            st.session_state.show_docs = False
+            st.rerun()
+
+    st.divider()
+
+    # Botón de descarga Word
+    if os.path.exists(doc_docx_path):
+        with open(doc_docx_path, "rb") as f:
+            st.download_button(
+                label="📄 Descargar Manual en Word (.DOCX)",
+                data=f.read(),
+                file_name="Manual_Gestion_Stock_Sucursales.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="secondary"
+            )
+        st.write("")
+
+    # Renderizar Markdown
+    if os.path.exists(doc_md_path):
+        with open(doc_md_path, "r", encoding="utf-8") as f:
+            contenido = f.read()
+        st.markdown(contenido)
+    else:
+        st.error(
+            f"No se encontró el archivo de documentación.\n\n"
+            f"Ruta esperada: `{doc_md_path}`\n\n"
+            "Asegurate de que **documentacion_reposicion.md** esté en la misma carpeta que app.py."
+        )
+
 
 # --- BARRA LATERAL (SIDEBAR) ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/4143/4143163.png", width=60) # Placeholder icon
+    st.image("https://cdn-icons-png.flaticon.com/512/4143/4143163.png", width=60)
     st.title("Gestión Stock")
     
     # --- SELECTOR DE MODO ---
@@ -114,8 +168,7 @@ with st.sidebar:
         ignorar_inhabilitados = st.checkbox("Ignorar Inhabilitados", value=True)
         ignorar_sin_stock = st.checkbox("Ignorar Sin Stock", value=True)
         ignorar_sin_demanda = st.checkbox("Ignorar Sin Demanda", value=True)
-        # NUEVO FILTRO DNS
-        ignorar_dns = st.checkbox("IgnorarInmovilizado/A Demanda)", value=True, help="Excluye items con Grupo Stock 'DNS - A Demanda' o 'DNS - Inmovilizado'")
+        ignorar_dns = st.checkbox("Ignorar Inmovilizado/A Demanda", value=True, help="Excluye items con Grupo Stock 'DNS - A Demanda' o 'DNS - Inmovilizado'")
 
     # Sección 2: Filtro de Familias
     st.subheader("🗂️ Familias Lógicas")
@@ -142,7 +195,7 @@ with st.sidebar:
         metodo_demanda = st.radio(
             "Método Estimación:",
             ('A', 'B'),
-            index=1, # Default B
+            index=1,
             horizontal=True,
             help="**Método A (Teórico):** Basado en parque de máquinas (Population) y coeficientes de familia.\n\n**Método B (Histórico):** Basado en histórico de ventas/reemplazos reciente (Recomendado)."
         )
@@ -169,12 +222,11 @@ with st.sidebar:
         metodo_demanda = st.radio(
             "Método Estimación (Base):", 
             ('A', 'B'), 
-            index=1, # Default B
+            index=1,
             horizontal=True,
             help="**Método A:** Cálculo Teórico (Parque).\n**Método B:** Cálculo Histórico (Rotación)."
         )
         
-        # CAMBIO: Parametrización del umbral de exceso
         st.markdown("---")
         umbral_devolucion = st.number_input(
             "Umbral de Exceso (Ratio)", 
@@ -186,12 +238,26 @@ with st.sidebar:
         meses_equiv = umbral_devolucion * 12
         st.caption(f"ℹ️ Se considerará sobrante todo stock que supere los **{meses_equiv:.1f} meses** de cobertura.")
 
-# --- ÁREA PRINCIPAL ---
+    # ─── BOTÓN DE DOCUMENTACIÓN (al final del sidebar) ───────────────────────
+    st.divider()
+    if st.button("📖 Manual de Usuario", use_container_width=True, help="Ver la documentación completa del sistema"):
+        st.session_state.show_docs = True
+        st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ÁREA PRINCIPAL: si show_docs está activo, mostrar documentación y detener
+# ─────────────────────────────────────────────────────────────────────────────
+if st.session_state.show_docs:
+    mostrar_documentacion()
+    st.stop()
+
+
+# --- ÁREA PRINCIPAL (normal) ---
 
 col_header_1, col_header_2 = st.columns([3, 1])
 with col_header_1:
     if modo_analisis == "Reposición (Envío)":
-        # Título dinámico según sucursal origen
         if 'sucursal_origen' in locals():
             st.title(f"📦 Reposiciones: {sucursal_origen} ➔ Red")
             st.markdown(f"Cálculo de envíos desde {sucursal_origen} para abastecer la red.")
@@ -230,7 +296,7 @@ else:
         if faltantes:
             st.error(f"❌ **Error de Formato:** Faltan columnas: {', '.join(faltantes)}")
         else:
-            # APLICACION DE FILTROS (Incuyendo DNS)
+            # APLICACION DE FILTROS (Incluyendo DNS)
             df = utils.aplicar_filtros_avanzados(df, ignorar_inhabilitados, ignorar_sin_stock, ignorar_sin_demanda, ignorar_dns)
             st.success(f"✅ Archivo cargado: **{len(df)} registros**.")
             st.divider()
@@ -257,7 +323,7 @@ else:
                         
                         if len(df_proc) == 0:
                             st.warning("⚠️ No hay registros para las familias seleccionadas.")
-                            st.session_state.data_calculada = None # Limpiar si falla
+                            st.session_state.data_calculada = None
                         else:
                             df_proc = logic.estimar_demanda(df_proc, metodo_demanda)
                             
@@ -286,7 +352,6 @@ else:
 
                                 # --- CÁLCULO DE COBERTURAS FINALES (Post Envío) - DINÁMICO ---
                                 for suc in [s.lower() for s in sucursales_destino_view]:
-                                    # Determinar columnas según la sucursal
                                     if suc == 'sf':
                                         col_stock = 'stock_total_sf_fisico'
                                         col_transito = 'qty_ot_transito_sf'
@@ -297,29 +362,18 @@ else:
                                     col_envio = f'final_enviar_{suc}'
                                     col_demanda = f'demanda_estimada_{suc}'
 
-                                    # Verificar que existan las columnas
                                     if col_stock in df_final.columns and col_envio in df_final.columns:
-                                        # Stock Final = Stock Actual + Transito OT + Envio Nuevo
                                         stock_final = df_final[col_stock] + df_final.get(col_transito, 0) + df_final[col_envio]
-
-                                        # Evitar division por cero (demanda 0 -> inf)
                                         df_final[f'cobertura_fin_{suc}'] = stock_final / df_final[col_demanda].replace(0, 0.0001)
 
                                 # --- LIMPIEZA DE DECIMALES ---
-                                # Ajuste solicitado: NO convertir 'diff' a int, sino redondear a 2 decimales.
                                 for col in df_final.columns:
-                                    # Criterio: Numerico y nombre específico. QUITO 'diff' de la lista de enteros.
                                     condicion_enteros = any(x in col for x in ['qty', 'qpres', 'qrem', 'stock', 'final_enviar', 'transito'])
-                                    
-                                    # Excepciones
                                     no_es_peso_vol = 'peso' not in col and 'volumen' not in col and 'cobertura' not in col
                                     
                                     if pd.api.types.is_numeric_dtype(df_final[col]):
-                                        # Si es de tipo entero (qty, stock, etc) -> Int
                                         if condicion_enteros and no_es_peso_vol:
                                             df_final[col] = df_final[col].fillna(0).round(0).astype(int)
-                                        
-                                        # Si es Sobra/Falta (diff) -> Float con 2 decimales
                                         elif 'diff' in col:
                                             df_final[col] = df_final[col].fillna(0).round(2)
 
@@ -331,16 +385,13 @@ else:
                             #                 MODO DEVOLUCIÓN
                             # ----------------------------------------------------
                             else:
-                                # 1. Calcular fisicos SF necesarios para el análisis de "Match"
                                 cols_sf_fisico = ['stock_sf', 'stock_aux', 'stock_sv_arg', 'stock_sv_min', 'stock_ns_noa']
                                 for c in cols_sf_fisico: 
                                     if c not in df_proc.columns: df_proc[c] = 0
                                 df_proc['stock_total_sf_fisico'] = df_proc[cols_sf_fisico].sum(axis=1)
 
-                                # 2. Lógica de Excedentes
                                 df_dev = logic.calcular_excedentes_sucursales(df_proc, umbral_meses_exceso=umbral_devolucion)
                                 
-                                # GUARDAR EN SESSION STATE
                                 st.session_state.data_calculada = df_dev
                                 st.session_state.modo_calculado = "Devolución (Sobrantes)"
 
@@ -365,7 +416,7 @@ else:
                         'grupo_stock': 'Grupo Stock',
                         'codigo': 'Codigo',
                         'descripcion': 'Descripcion',
-                        'descripcion2': 'Descripcion2',
+                        'datos_y_aplicaciones': 'Datos y aplicaciones',
                         'qty_piezas': 'qty piezas',
                         'peso': 'peso',
                         'volumen': 'volumen',
@@ -430,7 +481,7 @@ else:
                     }
                     
                     final_order = [
-                        'Familia Logica', 'Familia', 'Subfamilia', 'Subfamilia2', 'Grupo Stock', 'Codigo', 'Descripcion', 'Descripcion2',
+                        'Familia Logica', 'Familia', 'Subfamilia', 'Subfamilia2', 'Grupo Stock', 'Codigo', 'Descripcion', 'Datos y aplicaciones',
                         'qty piezas', 'peso', 'volumen', 'q pres total', 'q rem total', 'Wproducto', 'Wfamilia', 'd est total',
                         'stock total', 'cobertura total',
                         'q pres SF', 'Q rem SF', 'D est SF',
@@ -457,7 +508,6 @@ else:
                     df_view = df_view[cols_existentes]
                     
                     # --- NUEVA PLANILLA RESUMEN ---
-                    # Crear DF especifico para el pedido "Resumen"
                     cols_resumen_map = {
                         'codigo': 'Código',
                         'descripcion': 'Descripción',
@@ -521,7 +571,6 @@ else:
                     df_resumen = pd.DataFrame()
                     for col_orig, col_dest in cols_resumen_map.items():
                         if col_orig in df_final.columns:
-                            # Si es cobertura o diferencia, redondeamos a 2 decimales para que se vea bien
                             if 'cobertura' in col_orig or 'diff' in col_orig:
                                 df_resumen[col_dest] = df_final[col_orig].fillna(0).round(2)
                             else:
@@ -540,14 +589,12 @@ else:
                     # Pre-cálculo de columnas de totales para resumen (dinámico)
                     for suc in sucursales_destino_view:
                         col_envio = f'q enviar {suc}'
-                        # Verificar si existe la columna de envío
                         if col_envio not in df_view.columns:
                             continue
 
                         df_view[f'peso_total_{suc}'] = df_view[col_envio] * df_view['peso']
                         df_view[f'vol_total_{suc}'] = df_view[col_envio] * df_view['volumen']
 
-                        # Lógica de riesgo
                         col_demanda_orig = f'demanda_estimada_{suc.lower()}'
                         if suc.upper() == 'SF':
                             col_stock_orig = 'stock_total_sf_fisico'
@@ -557,7 +604,6 @@ else:
                             col_transito_orig = f'qty_ot_transito_{suc.lower()}'
                         col_enviar_orig = f'final_enviar_{suc.lower()}'
 
-                        # Verificar que existan las columnas necesarias
                         if col_stock_orig in df_final.columns and col_demanda_orig in df_final.columns:
                             stock_actual = df_final[col_stock_orig] + df_final.get(col_transito_orig, 0)
                             demanda = df_final[col_demanda_orig]
@@ -578,7 +624,6 @@ else:
                     for i, suc in enumerate(sucursales_destino_view):
                         with tabs[i]:
                             col_envio = f'q enviar {suc}'
-                            # Verificar si la columna existe en el dataframe
                             if col_envio not in df_view.columns:
                                 st.warning(f"No hay datos de envío para {suc}")
                                 continue
@@ -598,7 +643,7 @@ else:
                                 kpi3.metric("⚖️ Peso Total", f"{peso_tot:,.2f} kg")
                                 kpi4.metric("🧊 Volumen Total", f"{vol_tot:,.2f} m³")
                             
-                            st.write("") # Spacer
+                            st.write("")
                             
                             # Alertas de Stock
                             kriticos = df_view[df_view[f'risk_antes_{suc}']].shape[0]
@@ -647,20 +692,17 @@ else:
                             with st.expander("📑 Ver Planilla Detallada Completa", expanded=False):
                                 st.markdown("Vista previa de los datos procesados. Utilice el botón inferior para descargar el Excel/CSV completo.")
                                 
-                                # Definición de grupos para coloreado
                                 cols_total = ['q pres total', 'q rem total', 'Wproducto', 'Wfamilia', 'd est total', 'stock total', 'cobertura total']
                                 cols_sf = [c for c in df_display_final.columns if 'SF' in c or c in ['Stock Aux', 'Stock SV ARG', 'Stock SV MIN', 'Stock NS NOA']]
                                 cols_ba = [c for c in df_display_final.columns if 'BA' in c]
                                 cols_mdz = [c for c in df_display_final.columns if 'MDZ' in c]
                                 cols_slt = [c for c in df_display_final.columns if 'SLT' in c]
                                 
-                                # Validar existencia
                                 cols_total = [c for c in cols_total if c in df_display_final.columns]
                                 cols_sf = [c for c in cols_sf if c in df_display_final.columns]
 
                                 format_dict = {c: "{:.2f}" for c in df_display_final.select_dtypes(include='float').columns}
 
-                                # Lógica de estilo
                                 def highlight_wp(row):
                                     col_wp = 'Wproducto'
                                     col_wf = 'Wfamilia'
@@ -676,7 +718,6 @@ else:
 
                                 pd.set_option("styler.render.max_elements", 5000000)
                                 
-                                # Aplicar estilos
                                 styled_df = df_display_final.head(1000).style.apply(highlight_wp, axis=1)\
                                     .set_properties(subset=cols_sf, **{'background-color': '#fff0f0'})\
                                     .set_properties(subset=cols_ba, **{'background-color': '#e6f3ff'})\
@@ -700,52 +741,40 @@ else:
                         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                             df_resumen.to_excel(writer, index=False, sheet_name='Resumen')
 
-                            # Obtener el workbook y worksheet para aplicar formato
                             workbook = writer.book
                             worksheet = writer.sheets['Resumen']
 
-                            # Definir formatos con colores pasteles
-                            fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})  # Azul claro
-                            fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})  # Azul más oscuro
+                            fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})
+                            fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})
+                            fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})
+                            fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})
+                            fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})
+                            fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})
+                            fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})
+                            fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})
+                            fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})
+                            fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})
 
-                            fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})  # Verde claro
-                            fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})  # Verde más oscuro
-
-                            fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})  # Naranja claro
-                            fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})  # Naranja más oscuro
-
-                            fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})  # Rosa claro
-                            fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})  # Rosa más oscuro
-
-                            fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})  # Turquesa claro
-                            fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})  # Turquesa más oscuro
-
-                            # Aplicar formato por columnas usando set_column
-                            # Rango A-Q (0-16): col 0-16 con fmt_rango1, col 17 (R) con fmt_rango1_last
                             for col in range(0, min(17, len(df_resumen.columns))):
                                 worksheet.set_column(col, col, None, fmt_rango1)
                             if len(df_resumen.columns) > 17:
                                 worksheet.set_column(17, 17, None, fmt_rango1_last)
 
-                            # Rango S-AF (18-31): col 18-31 con fmt_rango2, col 32 (AG) con fmt_rango2_last
                             for col in range(18, min(32, len(df_resumen.columns))):
                                 worksheet.set_column(col, col, None, fmt_rango2)
                             if len(df_resumen.columns) > 32:
                                 worksheet.set_column(32, 32, None, fmt_rango2_last)
 
-                            # Rango AH-AP (33-41): col 33-41 con fmt_rango3, col 42 (AQ) con fmt_rango3_last
                             for col in range(33, min(42, len(df_resumen.columns))):
                                 worksheet.set_column(col, col, None, fmt_rango3)
                             if len(df_resumen.columns) > 42:
                                 worksheet.set_column(42, 42, None, fmt_rango3_last)
 
-                            # Rango AR-AZ (43-51): col 43-51 con fmt_rango4, col 52 (BA) con fmt_rango4_last
                             for col in range(43, min(52, len(df_resumen.columns))):
                                 worksheet.set_column(col, col, None, fmt_rango4)
                             if len(df_resumen.columns) > 52:
                                 worksheet.set_column(52, 52, None, fmt_rango4_last)
 
-                            # Rango BB-BJ (53-61): col 53-61 con fmt_rango5, col 62 (BK) con fmt_rango5_last
                             for col in range(53, min(62, len(df_resumen.columns))):
                                 worksheet.set_column(col, col, None, fmt_rango5)
                             if len(df_resumen.columns) > 62:
@@ -767,27 +796,20 @@ else:
                         with pd.ExcelWriter(buffer_comp, engine='xlsxwriter') as writer:
                             df_display_final.to_excel(writer, index=False, sheet_name='Detalle')
 
-                            # Aplicar mismo formato de colores al archivo completo
                             workbook = writer.book
                             worksheet = writer.sheets['Detalle']
 
-                            # Definir formatos con colores pasteles
                             fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})
                             fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})
-
                             fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})
                             fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})
-
                             fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})
                             fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})
-
                             fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})
                             fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})
-
                             fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})
                             fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})
 
-                            # Aplicar formato por rangos de columnas
                             for col in range(0, min(17, len(df_display_final.columns))):
                                 worksheet.set_column(col, col, None, fmt_rango1)
                             if len(df_display_final.columns) > 17:
@@ -830,7 +852,6 @@ else:
                     st.balloons()
                     st.markdown("### 📊 Tablero de Devoluciones y Excesos")
                     
-                    # Alerta informativa dinámica
                     st.markdown(f"""
                     <div class="alert-info alert-box">
                         <strong>Criterio:</strong> Se consideran sobrantes aquellos productos con una cobertura mayor a <b>{umbral_devolucion}</b> (aprox {umbral_devolucion*12:.1f} meses).
@@ -843,27 +864,22 @@ else:
                     
                     for i, suc in enumerate(sucursales_view):
                         with tabs[i]:
-                            # Corrección de clave en minúscula para coincidir con logic.py
                             col_exc_qty = f'excedente_qty_{suc.lower()}'
                             col_exc_peso = f'excedente_peso_{suc.lower()}'
                             col_exc_vol = f'excedente_vol_{suc.lower()}'
                             col_prioridad = f'prioridad_retorno_{suc.lower()}'
                             
-                            # Filtramos solo lo que tiene excedente > 0
                             df_suc_dev = df_dev[df_dev[col_exc_qty] > 0].copy()
                             
                             if len(df_suc_dev) == 0:
                                 st.success(f"✅ La sucursal {suc} no presenta excedentes significativos (> {umbral_devolucion} cobertura).")
                             else:
-                                # KPIs Generales
                                 c1, c2, c3, c4 = st.columns(4)
                                 total_items = df_suc_dev['codigo'].nunique()
                                 total_unidades = df_suc_dev[col_exc_qty].sum()
                                 total_peso = df_suc_dev[col_exc_peso].sum()
                                 total_vol = df_suc_dev[col_exc_vol].sum()
                                 
-                                # KPI Especial: Oportunidad de Retorno
-                                # Cantidad de items que sobran acá y faltan en SF
                                 items_match = df_suc_dev[df_suc_dev[col_prioridad]].shape[0]
                                 kg_match = df_suc_dev[df_suc_dev[col_prioridad]][col_exc_peso].sum()
 
@@ -881,13 +897,12 @@ else:
                                     </div>
                                     """, unsafe_allow_html=True)
                                 
-                                # Tabla Resumen por Familia
                                 st.markdown("##### 📦 Detalle por Familia")
                                 df_grp = df_suc_dev.groupby('familia_logica').agg({
                                     col_exc_qty: 'sum',
                                     col_exc_peso: 'sum',
                                     col_exc_vol: 'sum',
-                                    col_prioridad: 'sum' # Cuenta cuantos items son prioritarios
+                                    col_prioridad: 'sum'
                                 }).reset_index()
                                 
                                 df_grp.columns = ['Familia', 'Unidades Exceso', 'Peso (kg)', 'Volumen (m³)', 'Items Prioritarios (SF)']
@@ -898,7 +913,6 @@ else:
                                     'Items Prioritarios (SF)': '{:,.0f}'
                                 }).background_gradient(subset=['Items Prioritarios (SF)'], cmap='Reds'), use_container_width=True)
                                 
-                                # Expander con detalle SKU
                                 with st.expander(f"Ver detalle SKU de {suc}"):
                                     cols_detalle = ['familia_logica', 'codigo', 'descripcion', f'stock_{suc.lower()}', f'demanda_estimada_{suc.lower()}', col_exc_qty, col_prioridad]
                                     df_show_sku = df_suc_dev[cols_detalle].rename(columns={
@@ -916,27 +930,20 @@ else:
                     with pd.ExcelWriter(buffer_dev, engine='xlsxwriter') as writer:
                         df_dev.to_excel(writer, index=False, sheet_name='Excedentes')
 
-                        # Aplicar formato de colores
                         workbook = writer.book
                         worksheet = writer.sheets['Excedentes']
 
-                        # Definir formatos con colores pasteles
                         fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})
                         fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})
-
                         fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})
                         fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})
-
                         fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})
                         fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})
-
                         fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})
                         fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})
-
                         fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})
                         fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})
 
-                        # Aplicar formato por rangos de columnas
                         for col in range(0, min(17, len(df_dev.columns))):
                             worksheet.set_column(col, col, None, fmt_rango1)
                         if len(df_dev.columns) > 17:
