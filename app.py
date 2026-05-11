@@ -906,12 +906,31 @@ else:
                                 }).reset_index()
                                 
                                 df_grp.columns = ['Familia', 'Unidades Exceso', 'Peso (kg)', 'Volumen (m³)', 'Items Prioritarios (SF)']
+
+                                def _reds_gradient(col):
+                                    vmax = col.max()
+                                    if pd.isna(vmax) or vmax <= 0:
+                                        return ['' for _ in col]
+                                    styles = []
+                                    for v in col:
+                                        try:
+                                            ratio = float(v) / float(vmax)
+                                        except (TypeError, ValueError):
+                                            ratio = 0
+                                        ratio = max(0.0, min(1.0, ratio))
+                                        r = 255
+                                        g = int(245 - 165 * ratio)
+                                        b = int(240 - 200 * ratio)
+                                        text = '#ffffff' if ratio > 0.6 else '#000000'
+                                        styles.append(f'background-color: rgb({r},{g},{b}); color: {text}')
+                                    return styles
+
                                 st.dataframe(df_grp.style.format({
                                     'Unidades Exceso': '{:,.0f}',
                                     'Peso (kg)': '{:,.2f}',
                                     'Volumen (m³)': '{:,.2f}',
                                     'Items Prioritarios (SF)': '{:,.0f}'
-                                }).background_gradient(subset=['Items Prioritarios (SF)'], cmap='Reds'), use_container_width=True)
+                                }).apply(_reds_gradient, subset=['Items Prioritarios (SF)']), use_container_width=True)
                                 
                                 with st.expander(f"Ver detalle SKU de {suc}"):
                                     cols_detalle = ['familia_logica', 'codigo', 'descripcion', f'stock_{suc.lower()}', f'demanda_estimada_{suc.lower()}', col_exc_qty, col_prioridad]
