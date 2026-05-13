@@ -945,48 +945,271 @@ else:
                     # Descarga Global de Devoluciones (EXCEL CON FORMATO)
                     st.divider()
                     st.markdown("### 📥 Descargas Globales")
+
+                    df_export = df_dev.copy()
+
+                    suc_codes = ['ba', 'mdz', 'slt']
+                    suc_labels = {'ba': 'BA', 'mdz': 'MDZ', 'slt': 'SLT'}
+
+                    # Aseguramos columnas auxiliares
+                    for suc in suc_codes:
+                        for c in [f'excedente_qty_{suc}', f'excedente_peso_{suc}', f'excedente_vol_{suc}', f'prioridad_retorno_{suc}']:
+                            if c not in df_export.columns:
+                                df_export[c] = 0
+
+                    # Columnas derivadas: totales y recomendación
+                    df_export['total_excedente_qty'] = sum(df_export[f'excedente_qty_{s}'] for s in suc_codes)
+                    df_export['total_excedente_peso'] = sum(df_export[f'excedente_peso_{s}'] for s in suc_codes)
+                    df_export['total_excedente_vol'] = sum(df_export[f'excedente_vol_{s}'] for s in suc_codes)
+
+                    def _sucursales_prioritarias(row):
+                        marcadas = [suc_labels[s] for s in suc_codes if bool(row.get(f'prioridad_retorno_{s}', False))]
+                        return ' + '.join(marcadas) if marcadas else ''
+
+                    def _sucursales_con_excedente(row):
+                        marcadas = [suc_labels[s] for s in suc_codes if float(row.get(f'excedente_qty_{s}', 0) or 0) > 0]
+                        return ' + '.join(marcadas) if marcadas else ''
+
+                    df_export['sucursales_prioritarias'] = df_export.apply(_sucursales_prioritarias, axis=1)
+                    df_export['sucursales_con_excedente'] = df_export.apply(_sucursales_con_excedente, axis=1)
+
+                    def _recomendacion(row):
+                        if row['sucursales_prioritarias']:
+                            return '✅ DEVOLVER A SF'
+                        if row['total_excedente_qty'] > 0:
+                            return '⚠️ Excedente sin demanda en SF'
+                        return '— Sin excedente'
+
+                    df_export['recomendacion'] = df_export.apply(_recomendacion, axis=1)
+
+                    # Orden de columnas explícito por bloques
+                    col_identificacion = [c for c in ['codigo', 'descripcion', 'familia_logica', 'familia', 'subfamilia', 'subfamilia2', 'grupo_stock', 'peso', 'volumen'] if c in df_export.columns]
+                    col_recomendacion = ['recomendacion', 'sucursales_prioritarias', 'sucursales_con_excedente', 'total_excedente_qty', 'total_excedente_peso', 'total_excedente_vol']
+                    col_sf = [c for c in ['stock_total_sf_fisico', 'demanda_estimada_sf', 'sf_deficit', 'sf_necesita_stock'] if c in df_export.columns]
+
+                    col_por_suc = {}
+                    for suc in suc_codes:
+                        col_transito = 'qty_ot_transito_slt' if suc == 'slt' else f'qty_transito_{suc}'
+                        col_por_suc[suc] = [c for c in [
+                            f'stock_{suc}', col_transito, f'demanda_estimada_{suc}',
+                            f'excedente_qty_{suc}', f'excedente_peso_{suc}', f'excedente_vol_{suc}',
+                            f'prioridad_retorno_{suc}'
+                        ] if c in df_export.columns]
+
+                    columnas_ordenadas = col_identificacion + col_recomendacion + col_sf + col_por_suc['ba'] + col_por_suc['mdz'] + col_por_suc['slt']
+                    columnas_ordenadas = [c for c in columnas_ordenadas if c in df_export.columns]
+                    df_export = df_export[columnas_ordenadas]
+
+                    # Ordenar filas: primero las prioritarias, luego excedente total descendente
+                    df_export = df_export.assign(
+                        _orden_reco=df_export['recomendacion'].map({'✅ DEVOLVER A SF': 0, '⚠️ Excedente sin demanda en SF': 1, '— Sin excedente': 2})
+                    ).sort_values(by=['_orden_reco', 'total_excedente_peso'], ascending=[True, False]).drop(columns=['_orden_reco'])
+
+                    # Headers en español más legibles
+                    headers_legibles = {
+                        'codigo': 'Código',
+                        'descripcion': 'Descripción',
+                        'familia_logica': 'Familia Lógica',
+                        'familia': 'Familia',
+                        'subfamilia': 'Subfamilia',
+                        'subfamilia2': 'Subfamilia 2',
+                        'grupo_stock': 'Grupo Stock',
+                        'peso': 'Peso (kg/u)',
+                        'volumen': 'Volumen (m³/u)',
+                        'recomendacion': 'Recomendación',
+                        'sucursales_prioritarias': 'Sucursales Prioritarias',
+                        'sucursales_con_excedente': 'Sucursales c/ Excedente',
+                        'total_excedente_qty': 'Excedente Total (u)',
+                        'total_excedente_peso': 'Excedente Total (kg)',
+                        'total_excedente_vol': 'Excedente Total (m³)',
+                        'stock_total_sf_fisico': 'SF · Stock Físico',
+                        'demanda_estimada_sf': 'SF · Demanda',
+                        'sf_deficit': 'SF · Déficit',
+                        'sf_necesita_stock': 'SF · ¿Necesita?',
+                    }
+                    for suc in suc_codes:
+                        s_up = suc_labels[suc]
+                        headers_legibles.update({
+                            f'stock_{suc}': f'{s_up} · Stock',
+                            f'qty_transito_{suc}': f'{s_up} · Tránsito',
+                            'qty_ot_transito_slt': 'SLT · Tránsito',
+                            f'demanda_estimada_{suc}': f'{s_up} · Demanda',
+                            f'excedente_qty_{suc}': f'{s_up} · Excedente (u)',
+                            f'excedente_peso_{suc}': f'{s_up} · Excedente (kg)',
+                            f'excedente_vol_{suc}': f'{s_up} · Excedente (m³)',
+                            f'prioridad_retorno_{suc}': f'{s_up} · Prioritario SF',
+                        })
+
+                    df_to_write = df_export.rename(columns=headers_legibles)
+
                     buffer_dev = io.BytesIO()
                     with pd.ExcelWriter(buffer_dev, engine='xlsxwriter') as writer:
-                        df_dev.to_excel(writer, index=False, sheet_name='Excedentes')
+                        df_to_write.to_excel(writer, index=False, sheet_name='Excedentes', startrow=1, header=False)
 
                         workbook = writer.book
                         worksheet = writer.sheets['Excedentes']
 
-                        fmt_rango1 = workbook.add_format({'bg_color': '#E8F4F8'})
-                        fmt_rango1_last = workbook.add_format({'bg_color': '#C8E4F0'})
-                        fmt_rango2 = workbook.add_format({'bg_color': '#F0F8E8'})
-                        fmt_rango2_last = workbook.add_format({'bg_color': '#D8F0C8'})
-                        fmt_rango3 = workbook.add_format({'bg_color': '#FFF4E6'})
-                        fmt_rango3_last = workbook.add_format({'bg_color': '#FFE8C8'})
-                        fmt_rango4 = workbook.add_format({'bg_color': '#F8E8F4'})
-                        fmt_rango4_last = workbook.add_format({'bg_color': '#F0D0E8'})
-                        fmt_rango5 = workbook.add_format({'bg_color': '#E8F8F0'})
-                        fmt_rango5_last = workbook.add_format({'bg_color': '#D0F0E0'})
+                        n_rows = len(df_to_write)
+                        n_cols = len(df_to_write.columns)
+                        last_row = n_rows  # cabecera está en fila 0 → datos van de 1 a n_rows
 
-                        for col in range(0, min(17, len(df_dev.columns))):
-                            worksheet.set_column(col, col, None, fmt_rango1)
-                        if len(df_dev.columns) > 17:
-                            worksheet.set_column(17, 17, None, fmt_rango1_last)
+                        # Paleta por bloque (header oscuro, cuerpo claro)
+                        palette = {
+                            'id':   {'header': '#374151', 'body': '#F3F4F6'},  # gris
+                            'reco': {'header': '#B45309', 'body': '#FFF7ED'},  # ámbar destacado
+                            'sf':   {'header': '#1D4ED8', 'body': '#EFF6FF'},  # azul
+                            'ba':   {'header': '#047857', 'body': '#ECFDF5'},  # verde
+                            'mdz':  {'header': '#9D174D', 'body': '#FDF2F8'},  # rosa/magenta
+                            'slt':  {'header': '#6D28D9', 'body': '#F5F3FF'},  # violeta
+                        }
 
-                        for col in range(18, min(32, len(df_dev.columns))):
-                            worksheet.set_column(col, col, None, fmt_rango2)
-                        if len(df_dev.columns) > 32:
-                            worksheet.set_column(32, 32, None, fmt_rango2_last)
+                        def _bloque_de(col_name):
+                            if col_name in col_identificacion:
+                                return 'id'
+                            if col_name in col_recomendacion:
+                                return 'reco'
+                            if col_name in col_sf:
+                                return 'sf'
+                            for s in suc_codes:
+                                if col_name in col_por_suc[s]:
+                                    return s
+                            return 'id'
 
-                        for col in range(33, min(42, len(df_dev.columns))):
-                            worksheet.set_column(col, col, None, fmt_rango3)
-                        if len(df_dev.columns) > 42:
-                            worksheet.set_column(42, 42, None, fmt_rango3_last)
+                        # Formatos de header por bloque
+                        header_fmts = {
+                            k: workbook.add_format({
+                                'bold': True, 'font_color': 'white', 'bg_color': v['header'],
+                                'align': 'center', 'valign': 'vcenter', 'text_wrap': True,
+                                'border': 1, 'border_color': '#FFFFFF'
+                            }) for k, v in palette.items()
+                        }
 
-                        for col in range(43, min(52, len(df_dev.columns))):
-                            worksheet.set_column(col, col, None, fmt_rango4)
-                        if len(df_dev.columns) > 52:
-                            worksheet.set_column(52, 52, None, fmt_rango4_last)
+                        # Formatos de cuerpo (numéricos + texto) por bloque
+                        def _body_fmt(bloque, kind='int'):
+                            base = {'bg_color': palette[bloque]['body'], 'valign': 'vcenter', 'border': 1, 'border_color': '#E5E7EB'}
+                            if kind == 'int':
+                                base['num_format'] = '#,##0'
+                            elif kind == 'float2':
+                                base['num_format'] = '#,##0.00'
+                            elif kind == 'float3':
+                                base['num_format'] = '#,##0.000'
+                            elif kind == 'bool':
+                                base['align'] = 'center'
+                            elif kind == 'text':
+                                base['align'] = 'left'
+                            return workbook.add_format(base)
 
-                        for col in range(53, min(62, len(df_dev.columns))):
-                            worksheet.set_column(col, col, None, fmt_rango5)
-                        if len(df_dev.columns) > 62:
-                            worksheet.set_column(62, 62, None, fmt_rango5_last)
+                        # Resolver tipo de columna para formato numérico
+                        def _kind_of(col_internal):
+                            if col_internal in ('peso',):
+                                return 'float3'
+                            if col_internal == 'volumen' or col_internal.startswith('excedente_vol_') or col_internal == 'total_excedente_vol':
+                                return 'float3'
+                            if col_internal.startswith('excedente_peso_') or col_internal == 'total_excedente_peso':
+                                return 'float2'
+                            if col_internal == 'sf_deficit':
+                                return 'float2'
+                            if col_internal in ('sf_necesita_stock',) or col_internal.startswith('prioridad_retorno_'):
+                                return 'bool'
+                            if col_internal.startswith('demanda_estimada_'):
+                                return 'float2'
+                            if col_internal in ('codigo', 'descripcion', 'familia_logica', 'familia', 'subfamilia', 'subfamilia2', 'grupo_stock', 'recomendacion', 'sucursales_prioritarias', 'sucursales_con_excedente'):
+                                return 'text'
+                            return 'int'
+
+                        # Anchos sugeridos
+                        widths = {
+                            'codigo': 14, 'descripcion': 36, 'familia_logica': 14, 'familia': 16,
+                            'subfamilia': 18, 'subfamilia2': 18, 'grupo_stock': 18,
+                            'peso': 10, 'volumen': 12,
+                            'recomendacion': 28, 'sucursales_prioritarias': 18, 'sucursales_con_excedente': 18,
+                            'total_excedente_qty': 14, 'total_excedente_peso': 16, 'total_excedente_vol': 16,
+                            'stock_total_sf_fisico': 14, 'demanda_estimada_sf': 14, 'sf_deficit': 14, 'sf_necesita_stock': 12,
+                        }
+                        for suc in suc_codes:
+                            s_up = suc_labels[suc]
+                            widths.update({
+                                f'stock_{suc}': 10, f'qty_transito_{suc}': 12, 'qty_ot_transito_slt': 12,
+                                f'demanda_estimada_{suc}': 12, f'excedente_qty_{suc}': 13,
+                                f'excedente_peso_{suc}': 14, f'excedente_vol_{suc}': 14,
+                                f'prioridad_retorno_{suc}': 12,
+                            })
+
+                        # Aplicar header + column format
+                        for idx, col_internal in enumerate(columnas_ordenadas):
+                            bloque = _bloque_de(col_internal)
+                            kind = _kind_of(col_internal)
+                            header_label = headers_legibles.get(col_internal, col_internal)
+                            worksheet.write(0, idx, header_label, header_fmts[bloque])
+                            worksheet.set_column(idx, idx, widths.get(col_internal, 12), _body_fmt(bloque, kind))
+
+                        worksheet.set_row(0, 38)  # alto del header
+
+                        # Freeze panes después de Código + Descripción
+                        freeze_cols = min(2, n_cols)
+                        worksheet.freeze_panes(1, freeze_cols)
+
+                        # Autofiltro
+                        if n_rows > 0:
+                            worksheet.autofilter(0, 0, last_row, n_cols - 1)
+
+                        # ───── Formato condicional ─────
+                        if n_rows > 0:
+                            # 1) Resaltar fila completa cuando Recomendación = "✅ DEVOLVER A SF"
+                            reco_col_idx = columnas_ordenadas.index('recomendacion')
+                            reco_letter = chr(ord('A') + reco_col_idx) if reco_col_idx < 26 else None
+                            # xlsxwriter requiere referencia A1 — uso xl_col_to_name por seguridad
+                            from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
+                            reco_cell_first = xl_rowcol_to_cell(1, reco_col_idx, row_abs=False, col_abs=True)
+
+                            fmt_row_devolver = workbook.add_format({'bg_color': '#DCFCE7', 'bold': True})
+                            fmt_row_warn = workbook.add_format({'bg_color': '#FEF3C7'})
+
+                            worksheet.conditional_format(1, 0, last_row, n_cols - 1, {
+                                'type': 'formula',
+                                'criteria': f'=${xl_col_to_name(reco_col_idx)}2="✅ DEVOLVER A SF"',
+                                'format': fmt_row_devolver
+                            })
+                            worksheet.conditional_format(1, 0, last_row, n_cols - 1, {
+                                'type': 'formula',
+                                'criteria': f'=${xl_col_to_name(reco_col_idx)}2="⚠️ Excedente sin demanda en SF"',
+                                'format': fmt_row_warn
+                            })
+
+                            # 2) Escala de color sobre columnas de excedente (qty / peso) por sucursal y total
+                            scale_cols = [
+                                'total_excedente_qty', 'total_excedente_peso',
+                                'excedente_qty_ba', 'excedente_peso_ba',
+                                'excedente_qty_mdz', 'excedente_peso_mdz',
+                                'excedente_qty_slt', 'excedente_peso_slt',
+                            ]
+                            for c in scale_cols:
+                                if c in columnas_ordenadas:
+                                    ci = columnas_ordenadas.index(c)
+                                    worksheet.conditional_format(1, ci, last_row, ci, {
+                                        'type': '3_color_scale',
+                                        'min_color': '#FFFFFF',
+                                        'mid_color': '#FDE68A',
+                                        'max_color': '#DC2626'
+                                    })
+
+                            # 3) Resaltar SF · Déficit positivo (rojo) y negativo (verde claro)
+                            if 'sf_deficit' in columnas_ordenadas:
+                                ci = columnas_ordenadas.index('sf_deficit')
+                                worksheet.conditional_format(1, ci, last_row, ci, {
+                                    'type': 'cell', 'criteria': '>', 'value': 0,
+                                    'format': workbook.add_format({'bg_color': '#FECACA', 'bold': True})
+                                })
+
+                            # 4) Booleanos prioridad/necesita: verde si TRUE
+                            bool_cols = ['sf_necesita_stock'] + [f'prioridad_retorno_{s}' for s in suc_codes]
+                            for c in bool_cols:
+                                if c in columnas_ordenadas:
+                                    ci = columnas_ordenadas.index(c)
+                                    worksheet.conditional_format(1, ci, last_row, ci, {
+                                        'type': 'text', 'criteria': 'containing', 'value': 'True',
+                                        'format': workbook.add_format({'bg_color': '#A7F3D0', 'bold': True, 'align': 'center'})
+                                    })
 
                     st.download_button(
                         "💾 Descargar Reporte de Excedentes (.XLSX)",
